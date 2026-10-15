@@ -1,16 +1,25 @@
-# AxVaults — Multi-server
+# AxVaults
 
-Fork of [Artillex-Studios/AxVaults](https://github.com/Artillex-Studios/AxVaults), based on 2.16.1.
-Adds shared vault storage and ownership handoff between servers using Redis or MySQL.
+My fork of [Artillex-Studios/AxVaults](https://github.com/Artillex-Studios/AxVaults), based on 2.16.1. I've added shared vault storage through MySQL or Redis so players can use the same vaults across servers.
 
-**Downloads:** [Releases](https://github.com/SerhatDew/AxVaults/releases)
+[Downloads](https://github.com/SerhatDew/AxVaults/releases)
+
+## What's changed
+
+- Shared vault contents across servers using MySQL or Redis.
+- Synchronization through SQL polling or Redis Pub/Sub.
+- Ownership locks so two servers cannot edit the same player's vaults at once, including offline admin access.
+- Vaults are saved before ownership passes to another server.
+- Storage or locking errors block access rather than opening an inventory that may be out of date.
+- Players can take blacklisted items out of a vault, but cannot put them in.
+
+This is not simultaneous editing. Only one server owns a player's vaults at a time.
 
 ## Multi-server setup
 
-Every participating server must use the same plugin version, shared storage and synchronization mode.
-The proxy must forward the same player UUID on every server. Restart after changing backend settings.
+Use the same plugin version, shared storage, and synchronization mode on every participating server. Your proxy must forward the same player UUID to each server. Restart after changing backend settings.
 
-### MySQL storage with SQL polling
+### MySQL with SQL polling
 
 ```yaml
 database:
@@ -23,13 +32,13 @@ database:
 multi-server-support: sql
 ```
 
-Changes are announced through the shared database, polled every three seconds.
-Ownership checks do not wait for this polling interval.
+Servers check the shared database for change notifications every three seconds. Ownership checks happen separately and do not wait for the polling interval.
 
 ### Redis synchronization
 
-Set `multi-server-support: redis` with either shared MySQL storage or `database.type: redis`.
-Use the same Redis connection, logical database and channel on every participating server:
+Set `multi-server-support: redis`. You can keep vault contents in shared MySQL storage, or use `database.type: redis` to store them in Redis too.
+
+For Redis storage and synchronization:
 
 ```yaml
 database:
@@ -43,58 +52,68 @@ redis:
   channel: "axvaults:sync"
 ```
 
-When Redis stores vault contents, enable persistence, keep backups and use `maxmemory-policy noeviction`.
-Do not use an evicting cache for persistent vault data or ownership locks.
-H2 and SQLite remain available for single-server use with `multi-server-support: none`;
-separate local databases cannot synchronize inventories through Redis.
+Use the same Redis connection, logical database, and channel on all participating servers.
 
-## Ownership and failure handling
+If Redis stores your vault contents, enable persistence, keep backups, and set `maxmemory-policy noeviction`. An evicting cache is not suitable for vault data or ownership locks.
 
-- One server owns a player's vaults at a time, including offline administrative access.
-- A server saves before releasing ownership. The next server loads from shared storage after acquiring it.
-- A competing request waits up to ten seconds, then fails rather than taking an active server's lock.
-- Storage and lock failures deny access; failed saves retain the cached inventory and ownership.
-- Remote notifications do not overwrite an owned inventory. This is not simultaneous editing across servers.
-- Idle offline administrative inventories are saved and released after their viewers close.
+H2 and SQLite still work for a single server with `multi-server-support: none`. Separate local databases cannot share vault contents just by enabling Redis synchronization.
 
-Locks are intentionally persistent. After an unclean shutdown, stop the affected servers, inspect the
-last saved inventory and remove only the stale lock for the affected UUID before restarting:
+## How vault ownership works
+
+A server acquires ownership before loading a player's vaults from shared storage. It saves them before releasing ownership, so the next server can load the saved contents.
+
+If another server already owns the vaults, access waits for up to ten seconds and then fails. It does not take over an active lock. Notifications from other servers do not overwrite an inventory that is currently owned.
+
+Failed saves keep the cached inventory and its ownership. Offline admin inventories are saved and released once they are idle and their viewers have closed them.
+
+### After a server crash
+
+Locks do not expire automatically. After an unclean shutdown, you may need to remove a stale lock manually.
+
+Stop the affected servers first and check the last saved inventory. For MySQL, inspect the lock and remove only the row for the affected player and recorded owner:
 
 ```sql
 SELECT uuid, server, date FROM axvaults_locks WHERE uuid = '<player-uuid>';
 DELETE FROM axvaults_locks WHERE uuid = '<player-uuid>' AND server = '<recorded-owner>';
 ```
 
-For Redis, inspect `axvaults:lock:<player-uuid>` with `GET`, then delete that exact key with `DEL`.
-Never clear locks while their owner may still be running, and never flush the vault database.
-Unsaved changes cannot be recovered from a crashed process; restore from a backup if necessary.
+For Redis, inspect `axvaults:lock:<player-uuid>` with `GET`, then remove that exact key with `DEL`.
 
-## Upgrading and verification
+Never remove a lock while its owner might still be running. Do not flush the vault database. Changes that were only in memory when the server crashed cannot be recovered; restore from a backup if needed.
 
-Stop all participating servers and back up both storage and plugin configuration before upgrading.
-Start one server first and let schema migration finish before starting the others.
-Legacy MySQL tables gain the keys needed for atomic upserts. Identical duplicate rows can be collapsed;
-conflicting inventories stop startup for manual reconciliation instead of choosing one and discarding the other.
-Changing `database.type` does not migrate existing inventories to the new backend.
+## Upgrading
 
-Build with Java 21 and Maven:
+1. Stop all participating servers.
+2. Back up the storage and plugin configuration.
+3. Start one server and wait for the schema migration to finish.
+4. Start the remaining servers.
+
+Legacy MySQL tables get the keys needed for atomic upserts. Identical duplicate rows can be collapsed. If duplicate rows contain different inventories, startup stops so you can resolve them manually; the plugin does not pick one and discard the other.
+
+Changing `database.type` does not move existing inventories to the new backend.
+
+## Building and compatibility
+
+Build with JDK 21 and Maven:
 
 ```sh
 mvn clean verify
 ```
 
-The distributable is `target/AxVaults.jar`. The multi-server release was exercised with two Paper 1.21.4
-servers, real protocol clients, Redis 8.10.1 and MariaDB 11.4.5 through the MySQL connector.
-Standalone H2 and SQLite save/reconnect flows and manual-save completion were also exercised.
-Other Minecraft versions and Folia were not exercised in this release.
-Update notifications follow this fork's GitHub releases, not upstream releases.
+The plugin JAR is `target/AxVaults.jar`.
+
+The multi-server release was tested on two Paper 1.21.4 servers with real protocol clients, Redis 8.10.1, and MariaDB 11.4.5 through the MySQL connector. Single-server H2 and SQLite save/reconnect flows and manual-save completion were also tested.
+
+Other Minecraft versions and Folia were not tested for this release. Java 25 and Paper 26.2 support has not been verified here.
+
+Update notifications check this fork's GitHub releases, not upstream releases.
 
 ## Upstream
 
-Original project links:
+Original plugin by Artillex Studios:
 
-**Bug Reports and Feature Requests:** https://github.com/Artillex-Studios/Issues
+- [Source](https://github.com/Artillex-Studios/AxVaults)
+- [Bug reports and feature requests](https://github.com/Artillex-Studios/Issues)
+- [Discord](https://dc.artillex-studios.com/)
 
-**Support:** https://dc.artillex-studios.com/
-
-![axvaults-banner](https://github.com/Artillex-Studios/AxVaults/assets/52270269/5a8197f8-623c-418d-95cf-4fb3e32c1daf)
+![AxVaults banner](https://github.com/Artillex-Studios/AxVaults/assets/52270269/5a8197f8-623c-418d-95cf-4fb3e32c1daf)
