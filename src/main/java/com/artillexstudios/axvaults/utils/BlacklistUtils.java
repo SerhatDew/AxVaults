@@ -32,7 +32,7 @@ public class BlacklistUtils {
     }
 
     private static boolean checkLegacy(ItemStack it) {
-        Section section = CONFIG.getSection("blacklisted-items");
+        final Section section = CONFIG.getSection("blacklisted-items");
         if (section == null) return false;
         for (String s : section.getRoutesAsStrings(false)) {
             if (CONFIG.getString("blacklisted-items." + s + ".material") != null) {
