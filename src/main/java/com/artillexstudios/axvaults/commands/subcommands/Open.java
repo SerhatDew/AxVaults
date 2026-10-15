@@ -21,6 +21,9 @@ public enum Open {
             }
             VaultManager.getPlayer(sender).thenAccept(vaultPlayer -> {
                 new VaultSelector(sender, vaultPlayer).open();
+            }).exceptionally(error -> {
+                MESSAGEUTILS.sendLang(sender, "vault.unavailable");
+                return null;
             });
             return;
         }
@@ -44,6 +47,9 @@ public enum Open {
 
             vault.open(sender);
             MESSAGEUTILS.sendLang(sender, "vault.opened", replacements);
+        }).exceptionally(error -> {
+            MESSAGEUTILS.sendLang(sender, "vault.unavailable");
+            return null;
         });
     }
 }

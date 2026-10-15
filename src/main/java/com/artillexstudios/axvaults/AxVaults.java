@@ -18,8 +18,9 @@ import com.artillexstudios.axvaults.commands.CommandManager;
 import com.artillexstudios.axvaults.database.Database;
 import com.artillexstudios.axvaults.database.impl.H2;
 import com.artillexstudios.axvaults.database.impl.MySQL;
+import com.artillexstudios.axvaults.database.impl.Redis;
 import com.artillexstudios.axvaults.database.impl.SQLite;
-import com.artillexstudios.axvaults.database.messaging.SQLMessaging;
+import com.artillexstudios.axvaults.database.messaging.Messaging;
 import com.artillexstudios.axvaults.hooks.HookManager;
 import com.artillexstudios.axvaults.libraries.Libraries;
 import com.artillexstudios.axvaults.listeners.BlacklistListener;
@@ -32,11 +33,9 @@ import com.artillexstudios.axvaults.schedulers.AutoSaveScheduler;
 import com.artillexstudios.axvaults.utils.DebugUtils;
 import com.artillexstudios.axvaults.utils.UpdateNotifier;
 import com.artillexstudios.axvaults.utils.VaultUtils;
-import com.artillexstudios.axvaults.vaults.Vault;
 import com.artillexstudios.axvaults.vaults.VaultManager;
 import org.bstats.bukkit.Metrics;
 import org.bukkit.Bukkit;
-import org.bukkit.entity.HumanEntity;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -75,8 +74,8 @@ public final class AxVaults extends AxPlugin {
         Libraries.load(instance, manager);
     }
 
-    @Override
     public void enable() {
+        stopping = false;
         new Metrics(this, 20541);
 
         CONFIG = new Config(new File(getDataFolder(), "config.yml"), getResource("config.yml"), GeneralSettings.builder().setUseDefaults(false).build(), LoaderSettings.builder().setAutoUpdate(true).build(), DumperSettings.DEFAULT, UpdaterSettings.builder().setKeepAll(true).setVersioning(new BasicVersioning("version")).build());
@@ -90,15 +89,18 @@ public final class AxVaults extends AxPlugin {
         HookManager.setupHooks();
         DebugUtils.init(CONFIG);
 
-        database = switch (CONFIG.getString("database.type").toLowerCase()) {
+        database = switch (CONFIG.getString("database.type", "h2").toLowerCase()) {
             case "sqlite" -> new SQLite();
             case "mysql" -> new MySQL();
+            case "redis" -> new Redis();
             default -> new H2();
         };
 
         database.setup();
 
         threadedQueue.submit(() -> database.load());
+
+        Messaging.start();
 
         getServer().getPluginManager().registerEvents(new PlayerListeners(), this);
         getServer().getPluginManager().registerEvents(new BlacklistListener(), this);
@@ -110,8 +112,6 @@ public final class AxVaults extends AxPlugin {
         CommandManager.load();
 
         AutoSaveScheduler.start();
-        SQLMessaging.start();
-
         metrics = new AxMetrics(this, 3);
         metrics.start();
 
@@ -121,30 +121,62 @@ public final class AxVaults extends AxPlugin {
         if (CONFIG.getBoolean("update-notifier.enabled", true)) new UpdateNotifier();
     }
 
-    @Override
     public void disable() {
         stopping = true;
         if (metrics != null) metrics.cancel();
-        for (Vault vault : VaultManager.getVaults()) {
-            for (HumanEntity humanEntity : new ArrayList<>(vault.getInventory().getViewers())) {
-                humanEntity.closeInventory();
-            }
-        }
-
         AutoSaveScheduler.stop();
-        List<CompletableFuture<?>> futures = new ArrayList<>();
-        for (Vault vault : VaultManager.getVaults()) {
-            futures.add(VaultUtils.save(vault));
+
+        // Drain work queued before shutdown (notably a delete restoration) before taking
+        // final snapshots. Late completion callbacks are stopping-aware and do not touch Bukkit.
+        boolean queueSucceeded = true;
+        try {
+            CompletableFuture<Void> barrier = new CompletableFuture<>();
+            threadedQueue.submit(() -> barrier.complete(null));
+            barrier.join();
+        } catch (Throwable throwable) {
+            queueSucceeded = false;
+            Bukkit.getLogger().severe("Failed to drain the AxVaults datastore queue before shutdown snapshots: "
+                    + cause(throwable));
         }
 
-        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
-        SQLMessaging.stop();
+        // Closing is a Bukkit operation and must happen before any final persistence snapshot.
+        VaultManager.closeAllInventories();
+        List<CompletableFuture<Void>> saves = new ArrayList<>();
+        for (var vaultPlayer : List.copyOf(VaultManager.getPlayers().values())) {
+            if (vaultPlayer.isLoaded()) saves.add(VaultManager.save(vaultPlayer));
+        }
+
+        boolean savesSucceeded = true;
+        try {
+            saves.add(VaultManager.pendingSaves());
+            CompletableFuture.allOf(saves.toArray(CompletableFuture[]::new)).join();
+        } catch (Throwable throwable) {
+            savesSucceeded = false;
+            Bukkit.getLogger().severe("Failed to persist all vaults during shutdown: " + cause(throwable));
+        }
+
+        try {
+            CompletableFuture<Void> barrier = new CompletableFuture<>();
+            threadedQueue.submit(() -> barrier.complete(null));
+            barrier.join();
+        } catch (Throwable throwable) {
+            queueSucceeded = false;
+            Bukkit.getLogger().severe("Failed to drain the AxVaults datastore queue during shutdown: " + cause(throwable));
+        }
+
+        boolean releaseLocks = savesSucceeded && queueSucceeded;
+        Messaging.stop(releaseLocks);
         database.disable();
         threadedQueue.stop();
     }
 
-    @Override
     public void updateFlags() {
         FeatureFlags.LOGGER_NAME_FORMAT.set(LoggerNameFormat.NAMEABLE);
+    }
+
+    private static String cause(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null) current = current.getCause();
+        return current.toString();
     }
 }

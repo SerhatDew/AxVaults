@@ -63,6 +63,7 @@ vault:
   not-unlocked: "&#FF0000You don't own this vault!"
   opened: "&fVault &#55FF00#%num% &fopened!"
   closed: "&fVault &#55FF00#%num% &fclosed!"
+  unavailable: "&#FF0000Vaults are unavailable. They may be in use on another server; try again shortly."
 
 reload:
   success: "&#33FF33Plugin successfully reloaded!"
@@ -122,4 +123,4 @@ commands:
 update-notifier: "&#BBFF88There is a new version of AxVaults available! &#DDDDDD(&#FFFFFFcurrent: &#FF0000%current% &#DDDDDD| &#FFFFFFlatest: &#00FF00%latest%&#DDDDDD)"
 
 # do not change this
-version: 10
+version: 11

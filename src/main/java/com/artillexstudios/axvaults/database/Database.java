@@ -3,6 +3,7 @@ package com.artillexstudios.axvaults.database;
 import com.artillexstudios.axvaults.vaults.Vault;
 import com.artillexstudios.axvaults.vaults.VaultPlayer;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -14,7 +15,7 @@ public interface Database {
 
     void setup();
 
-    void saveVault(Vault vault, Object result);
+    void saveVault(@NotNull Vault vault, Object result, @Nullable Material icon);
 
     void loadVaults(@NotNull VaultPlayer vaultPlayer);
 
@@ -28,5 +29,7 @@ public interface Database {
 
     void load();
 
+
+    default void updateVault(@NotNull VaultPlayer vaultPlayer, int id) {}
     void disable();
 }

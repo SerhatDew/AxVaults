@@ -35,6 +35,9 @@ public enum ForceOpen {
             }
             new VaultSelector(player, vaultPlayer).open();
             MESSAGEUTILS.sendLang(sender, "force-open", Collections.singletonMap("%player%", player.getName()));
+        }).exceptionally(error -> {
+            MESSAGEUTILS.sendLang(sender, "vault.unavailable");
+            return null;
         });
 
     }

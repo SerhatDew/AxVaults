@@ -23,6 +23,9 @@ public enum View {
             VaultManager.getPlayer(player).thenAccept(vaultPlayer -> {
                 replacements.put("%vaults%", vaultPlayer.getVaultMap().values().stream().filter(vault -> vault.getSlotsFilled() != 0).map(vault -> "" + vault.getId()).collect(Collectors.joining(", ")));
                 MESSAGEUTILS.sendLang(sender, "view.info", replacements);
+            }).exceptionally(error -> {
+                MESSAGEUTILS.sendLang(sender, "vault.unavailable");
+                return null;
             });
             return;
         }
@@ -37,6 +40,9 @@ public enum View {
             }
             vault.open(sender);
             MESSAGEUTILS.sendLang(sender, "view.open", replacements);
+        }).exceptionally(error -> {
+            MESSAGEUTILS.sendLang(sender, "vault.unavailable");
+            return null;
         });
     }
 }

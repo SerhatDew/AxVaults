@@ -12,6 +12,7 @@ import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 
 import static com.artillexstudios.axvaults.AxVaults.CONFIG;
+import static com.artillexstudios.axvaults.AxVaults.MESSAGEUTILS;
 
 public class InventoryClickListener implements Listener {
 
@@ -23,11 +24,13 @@ public class InventoryClickListener implements Listener {
             event.setCancelled(true);
             return;
         }
-
         boolean openSelector = CONFIG.getBoolean("clicking-outside-open-selector", false);
         if (openSelector && player.hasPermission("axvaults.selector") && event.getAction() == InventoryAction.NOTHING && event.getClickedInventory() == null) {
             VaultManager.getPlayer(player).thenAccept(vaultPlayer -> {
                 new VaultSelector(player, vaultPlayer).open();
+            }).exceptionally(error -> {
+                MESSAGEUTILS.sendLang(player, "vault.unavailable");
+                return null;
             });
         }
     }

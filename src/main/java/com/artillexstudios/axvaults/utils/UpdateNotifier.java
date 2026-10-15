@@ -9,6 +9,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.jetbrains.annotations.Nullable;
+import org.json.JSONObject;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -81,14 +82,15 @@ public class UpdateNotifier implements Listener {
     private String readVersion() {
         try (HttpClient client = HttpClient.newHttpClient()) {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(new URI("https://www.artillex-studios.com/api/v1/resource/%s/latest-version".formatted(AxVaults.getInstance().getName())))
+                    .uri(new URI("https://api.github.com/repos/SerhatDew/AxVaults/releases/latest"))
                     .timeout(Duration.of(10, SECONDS))
                     .GET()
                     .build();
 
-            HttpResponse<?> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) return null;
-            return response.body().toString();
+            String tag = new JSONObject(response.body()).getString("tag_name");
+            return tag.startsWith("v") ? tag.substring(1) : tag;
         } catch (Exception ex) {
             return null;
         }
@@ -99,18 +101,7 @@ public class UpdateNotifier implements Listener {
     }
 
     public boolean isOutdated(String current) {
-        if (latest == null) return false;
-        String[] parts1 = latest.split("\\.");
-        String[] parts2 = current.split("\\.");
-        for (int i = 0; i < 3; i++) {
-            int num1 = Integer.parseInt(parts1[i]);
-            int num2 = Integer.parseInt(parts2[i]);
-            if (num1 > num2) {
-                return true;
-            } else if (num1 < num2) {
-                return false;
-            }
-        }
-        return false;
+        // GitHub's latest release is authoritative for this fork, including suffixed versions.
+        return latest != null && !latest.equals(current);
     }
 }

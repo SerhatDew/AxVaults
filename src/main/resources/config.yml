@@ -19,9 +19,45 @@ item-picker-rows: 6
 vault-storage-rows: 6
 
 database:
-  # h2, sqlite
-  # for single server setups we recommend h2
+  # Supported types: h2, sqlite, mysql, redis
+  # For single server setups we recommend h2 or sqlite
+  # Multi-server setups require shared MySQL or Redis storage on every server
   type: "h2"
+  address: "localhost"
+  port: 3306
+  database: "axvaults"
+  username: "root"
+  password: ""
+  ssl: false
+  pool:
+    maximum-pool-size: 10
+    minimum-idle: 5
+    maximum-lifetime: 1800000
+    keepalive-time: 30000
+    connection-timeout: 30000
+
+# multi-server synchronization (restart required):
+# none - single-server use
+# redis - Redis Pub/Sub with shared MySQL or Redis storage
+# sql - MySQL polling every 3 seconds with shared MySQL storage
+# all servers sharing vault data must use the same mode and backend settings
+# vaults remain unavailable if another server owns them or the lock backend fails
+multi-server-support: "none"
+
+# Redis settings for multi-server synchronization or Redis database
+redis:
+  host: "localhost"
+  port: 6379
+  password: ""
+  user: ""
+  database: 0
+  ssl: false
+  timeout: 2000
+  channel: "axvaults:sync"
+  pool:
+    max-total: 16
+    max-idle: 8
+    min-idle: 2
 
 # modes:
 # 0 - every vault needs a separate permission (axvaults.vault.10 will only give access to vault #10)
@@ -119,4 +155,4 @@ update-notifier:
 debug: false
 
 # do not change this
-version: 11
+version: 13

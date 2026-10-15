@@ -1,13 +1,16 @@
 package com.artillexstudios.axvaults.vaults;
 
 import com.artillexstudios.axvaults.AxVaults;
+import com.artillexstudios.axvaults.database.messaging.Messaging;
 import com.artillexstudios.axvaults.utils.PermissionUtils;
 import com.artillexstudios.axvaults.utils.ThreadUtils;
 import com.artillexstudios.axvaults.utils.VaultUtils;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.entity.HumanEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -23,7 +26,7 @@ import static com.artillexstudios.axvaults.AxVaults.CONFIG;
 public class VaultPlayer {
     private final UUID uuid;
     private final ConcurrentHashMap<Integer, Vault> vaultMap = new ConcurrentHashMap<>();
-    private boolean loaded = false;
+    private volatile boolean loaded = false;
 
     public VaultPlayer(UUID uuid) {
         this.uuid = uuid;
@@ -38,15 +41,45 @@ public class VaultPlayer {
     }
 
     public void load() {
+        if (AxVaults.isStopping()) {
+            throw new IllegalStateException("Cannot load a player while AxVaults is stopping");
+        }
         AxVaults.getDatabase().loadVaults(this);
+        if (AxVaults.isStopping()) {
+            throw new IllegalStateException("Player load completed while AxVaults was stopping");
+        }
         loaded = true;
     }
 
     public void load(CompletableFuture<VaultPlayer> cf) {
-        load();
-        ThreadUtils.runSync(() -> {
-            cf.complete(this);
-        });
+        try {
+            load();
+            ThreadUtils.runSync(() -> cf.complete(this));
+        } catch (Throwable throwable) {
+            ThreadUtils.runSync(() -> cf.completeExceptionally(throwable));
+        }
+    }
+
+    // applies a vault change made on another server, items == null means the vault was deleted
+    // must be called from the main thread
+    public void applyRemoteChange(int id, @Nullable ItemStack[] items, @Nullable Material icon) {
+        if (AxVaults.isStopping()) return;
+        if (Messaging.holdsLock(uuid)) return;
+        if (VaultManager.getPlayers().get(uuid) != this) return;
+
+        if (items == null) {
+            Vault vault = vaultMap.remove(id);
+            if (vault != null) close(vault.getStorage());
+            return;
+        }
+
+        Vault vault = vaultMap.get(id);
+        if (vault == null) {
+            new Vault(this, id, icon, items);
+            return;
+        }
+        vault.setContents(items);
+        vault.setIcon(icon, false);
     }
 
     public ConcurrentHashMap<Integer, Vault> getVaultMap() {
@@ -88,13 +121,30 @@ public class VaultPlayer {
         return def;
     }
 
-    public void save() {
-        AxVaults.getThreadedQueue().submit(() -> {
-            for (Vault vault : vaultMap.values()) {
-                VaultUtils.save(vault);
+    public CompletableFuture<Void> save() {
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        ThreadUtils.runSync(() -> {
+            try {
+                // A quit save must close viewers before VaultUtils takes its final inventory snapshot.
+                closeInventories();
+                List<Vault> vaults = List.copyOf(vaultMap.values());
+                CompletableFuture<?>[] futures = new CompletableFuture[vaults.size()];
+                for (int i = 0; i < vaults.size(); i++) {
+                    futures[i] = VaultUtils.save(vaults.get(i));
+                }
+                CompletableFuture.allOf(futures).whenComplete((ignored, throwable) -> {
+                    if (throwable == null) result.complete(null);
+                    else result.completeExceptionally(throwable);
+                });
+            } catch (Throwable throwable) {
+                result.completeExceptionally(throwable);
             }
         });
+        return result;
+    }
 
+    public void closeInventories() {
+        ThreadUtils.checkMain("closing vault inventories");
         for (Vault vault : vaultMap.values()) {
             close(vault.getStorage());
         }

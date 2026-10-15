@@ -3,6 +3,7 @@ package com.artillexstudios.axvaults.vaults;
 import com.artillexstudios.axapi.utils.ContainerUtils;
 import com.artillexstudios.axapi.utils.StringUtils;
 import com.artillexstudios.axvaults.AxVaults;
+import com.artillexstudios.axvaults.database.messaging.Messaging;
 import com.artillexstudios.axvaults.hooks.HookManager;
 import com.artillexstudios.axvaults.utils.SoundUtils;
 import com.artillexstudios.axvaults.utils.ThreadUtils;
@@ -35,18 +36,21 @@ public class Vault implements InventoryHolder {
     private final List<ItemStack> overflow = new ArrayList<>();
 
     public Vault(VaultPlayer vaultPlayer, int id, Material icon, @Nullable ItemStack[] contents) {
+        if (AxVaults.isStopping()) {
+            throw new IllegalStateException("Cannot create a vault while AxVaults is stopping");
+        }
+
         this.vaultPlayer = vaultPlayer;
         this.id = id;
-
         this.storage = Bukkit.createInventory(this, vaultPlayer.getRows() * 9, getTitle());
         if (contents != null) setContents(contents);
         vaultPlayer.getVaultMap().put(id, this);
-
         this.icon = icon;
     }
 
     @ApiStatus.Internal
     public void setContents(ItemStack[] items) {
+        overflow.clear();
         if (storage.getSize() < items.length) {
             for (int i = 0; i < storage.getSize(); i++) {
                 storage.setItem(i, items[i]);
@@ -86,7 +90,13 @@ public class Vault implements InventoryHolder {
     }
 
     public void setIcon(Material icon) {
-        changed.set(true);
+        setIcon(icon, true);
+    }
+
+    @ApiStatus.Internal
+    public void setIcon(@Nullable Material icon, boolean markChanged) {
+        if (markChanged && !canEdit()) return;
+        if (markChanged) changed.set(true);
         this.icon = icon;
     }
 
@@ -110,12 +120,13 @@ public class Vault implements InventoryHolder {
     }
 
     public void open(@NotNull Player player) {
-        if (AxVaults.isStopping()) {
-            // prevent opening vaults when the plugin is shutting down
+        if (!canEdit()) {
+            // prevent opening stale or unowned vaults during handoff/deletion
             return;
         }
 
         ThreadUtils.runSync(player, () -> {
+            if (!canEdit()) return;
             changed.set(true);
             // recalculate vault if the row count has changed
             if (vaultPlayer.getRows() * 9 != storage.getSize()) {
@@ -131,6 +142,16 @@ public class Vault implements InventoryHolder {
             SoundUtils.playSound(player, MESSAGES.getString("sounds.open"));
             lastOpen = System.currentTimeMillis();
         });
+    }
+
+    private boolean canEdit() {
+        UUID uuid = vaultPlayer.getUUID();
+        return !AxVaults.isStopping()
+                && VaultManager.getPlayers().get(uuid) == vaultPlayer
+                && vaultPlayer.getVaultMap().get(id) == this
+                && !VaultManager.isPersistenceOperationPending(uuid)
+                && !VaultManager.isSavePending(uuid)
+                && (!Messaging.isEnabled() || Messaging.holdsLock(uuid));
     }
 
     private void dropOverFlow(@NotNull Player player) {
